@@ -17,6 +17,11 @@
    <bookmark name="Backgrounds" href="#backgrounds"/>
    <bookmark name="Abbreviations" href="#abbreviations"/>
    <bookmark name="Conclusion" href="#conclusion"/>
+   <bookmark name="Extended links test" href="#extended-links-test"/>
+     <bookmark name="Link inside a list item" href="#link-inside-a-list-item"/>
+     <bookmark name="Link inside a heading" href="#link-inside-a-heading"/>
+     <bookmark name="Link inside a table cell" href="#link-inside-a-table-cell"/>
+     <bookmark name="Image link" href="#image-link"/>
   </bookmarks>
     
   <style>
@@ -37,7 +42,7 @@
   }
   </style>
 </head>
-<body style="">
+<body>
  <h1 id="title">All-in-one accessible (PDF/UA, Section 508, WCAG) PDF example</h1>
 
  <h2 id="para">Simple paragraphs</h2>
@@ -66,7 +71,7 @@
  <img src="../../demos/images/flyingsaucer.png" alt="The FlyingSaucer logo. We should get our own!"/>
 
  <h2 id="links">Links</h2>
- <p>This is an external link to the project <a title="The openhtmltopdf.com homepage" href="https://openhtmltopdf.com">homepage</a>.</p>
+ <p>This is an external link to the project <a title="openhtmltopdf.com homepage" href="https://openhtmltopdf.com">homepage</a>.</p>
  <p>This is an internal link to the <a title="Go to top" href="#title">top</a> of the document.</p>
  
  <h2 id="tables">Tables</h2>
@@ -103,6 +108,40 @@
 
  <h2 id="conclusion">Conclusion</h2>
  <p>Remember to keep it simple for PDF/UA compliance.</p>
+
+ <h2 id="extended-links-test">Extended links test</h2>
+ <h3 id="link-inside-a-list-item">Link inside a list item</h3>
+ <ul>
+  <li>Link inside <a href="https://developer.mozilla.org/en-US/docs/Web/HTML/Reference/Elements/li">li</a> element</li>
+  <li>Link inside another <a href="https://developer.mozilla.org/en-US/docs/Web/HTML/Reference/Elements/li">li</a> element</li>
+ </ul>
+<h3 id="link-inside-a-heading">Link inside a heading</h3>
+
+ <h4>Link inside <a href="https://developer.mozilla.org/en-US/docs/Web/HTML/Reference/Elements/Heading_Elements">h6</a> element</h6>
+
+ <h3 id="link-inside-a-table-cell">Link inside table cell</h3>
+
+ <table>
+  <caption>Simple table example with fake data</caption>
+  
+  <thead>
+    <tr><th>Col One</th><th>Col Two</th></tr>
+  </thead>
+  
+  <tbody>
+    <tr><td>Link inside <a href="https://developer.mozilla.org/en-US/docs/Web/HTML/Reference/Elements/tr">tr</a> element</td><td>Two</td></tr>
+    <tr><td>Three</td><td>Four</td></tr>
+    <tr><td>Five</td><td>Six</td></tr>
+  </tbody>
+  
+  <tfoot>
+    <tr><td>Footer1</td><td>Footer2</td></tr>
+    <tr><td>Footer3</td><td>Footer4</td></tr>
+  </tfoot> 
+ </table>
  
+<h3 id="image-link">Image link</h3>
+<a href="https://openhtmltopdf.com"><img src="../../demos/images/flyingsaucer.png" alt="The FlyingSaucer logo. We should get our own!"/></a>
+
 </body>
 </html>

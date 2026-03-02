@@ -71,6 +71,37 @@ public class PdfBoxAccessibilityHelper {
     private AbstractStructualElement _currentBlockSpanElement;
     private boolean _blockSpanOpen;
 
+
+    /**
+     * Returns true if the box's HTML element has any descendant &lt;a&gt; anchor element.
+     */
+    private static boolean blockContainsLink(Box box) {
+        org.w3c.dom.Element el = box.getElement();
+        if (el == null) {
+            return false;
+        }
+        return el.getElementsByTagName("a").getLength() > 0;
+    }
+
+    /**
+     * Walks up from box to find the nearest non-LineBox BlockBox (the actual containing
+     * block, e.g. P, H*, TD) and returns true if that block contains any &lt;a&gt; links.
+     *
+     * This is called per TEXT run rather than relying on a flag set in the BLOCK phase,
+     * because in the display-list rendering model the BLOCK background phase runs for
+     * ALL blocks before the INLINE/TEXT content phase, so a global flag would be stale.
+     */
+    private static boolean containingBlockHasLinks(Box box) {
+        Box b = box.getParent();
+        while (b != null) {
+            if (b instanceof BlockBox && !(b instanceof LineBox)) {
+                return blockContainsLink(b);
+            }
+            b = b.getParent();
+        }
+        return false;
+    }
+
     /**
      * Returns true if the box is an InlineLayoutBox that contains no actual text
      * (all InlineText children are empty). Used to avoid creating empty Span
@@ -1264,6 +1295,11 @@ public class PdfBoxAccessibilityHelper {
                     getContainingBlockStructureElement(box) == _currentBlockSpanElement) {
                     return FALSE_TOKEN;
                 }
+                /* When the containing block uses per-run Spans (because it contains links),
+                 * treat inline backgrounds the same as the _blockSpanOpen case – no artifact. */
+                if (box instanceof InlineLayoutBox && containingBlockHasLinks(box)) {
+                    return FALSE_TOKEN;
+                }
                 if (box.hasNonTextContent(_ctx)) {
                     COSDictionary current = createBackgroundArtifact(type, box);
                     _cs.beginMarkedContent(COSName.ARTIFACT, current);
@@ -1292,6 +1328,28 @@ public class PdfBoxAccessibilityHelper {
             case TEXT: {
                 if (hasNoTextContent(box)) {
                     return FALSE_TOKEN;
+                }
+                if (containingBlockHasLinks(box)) {
+                    /*
+                     * The containing block (P, H*, etc.) has one or more <a> links.
+                     * Use the per-run Span approach (one BDC/EMC per InlineLayoutBox) so
+                     * that the Link structure elements appear in the correct position
+                     * relative to surrounding text in the structure tree.
+                     *
+                     * In the display-list rendering model, the BLOCK background phase runs
+                     * for all blocks before inline/text content is painted, so we cannot
+                     * rely on a flag set during BLOCK processing – we must walk up the box
+                     * tree here at TEXT time to find the real containing block.
+                     *
+                     * Content items are routed through the box's own accessibility object
+                     * (set up during INLINE processing). Text inside <a> naturally goes to
+                     * AnchorStuctualElement; text outside goes to the surrounding lineBox
+                     * structure (skipped in finish(), delegating its children in paint order
+                     * directly to the block element P/H*).
+                     */
+                    GenericContentItem current = createMarkedContentStructureItem(type, box);
+                    _cs.beginMarkedContent(COSName.getPDFName(StandardStructureTypes.SPAN), current.dict);
+                    return TRUE_TOKEN;
                 }
                 AbstractStructualElement blockStruct = getContainingBlockStructureElement(box);
                 if (blockStruct == null) {

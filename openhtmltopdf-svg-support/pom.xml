@@ -83,7 +83,7 @@
   <build>
 	  <resources>
 	    <resource>
-	      <directory>../</directory>
+	      <directory>${maven.multiModuleProjectDirectory}</directory>
 	      <targetPath>META-INF</targetPath>
 	      <includes>
 	        <include>LICENSE*</include>
