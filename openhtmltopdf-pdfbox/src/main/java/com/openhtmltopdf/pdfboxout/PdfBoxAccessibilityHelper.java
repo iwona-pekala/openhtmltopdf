@@ -103,6 +103,59 @@ public class PdfBoxAccessibilityHelper {
     }
 
     /**
+     * Returns true if the containing block element has at least one &lt;abbr&gt; child
+     * element that carries a {@code title} attribute.  Only abbreviations with a title
+     * need per-run Span treatment (to carry the PDF Expansion Text / E attribute).
+     */
+    private static boolean blockContainsAbbr(Box box) {
+        org.w3c.dom.Element el = box.getElement();
+        if (el == null) {
+            return false;
+        }
+        org.w3c.dom.NodeList abbrs = el.getElementsByTagName("abbr");
+        for (int i = 0; i < abbrs.getLength(); i++) {
+            if (!((org.w3c.dom.Element) abbrs.item(i)).getAttribute("title").isEmpty()) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
+     * Walks up from box to find the nearest non-LineBox BlockBox and returns
+     * true if that block contains any &lt;abbr title="..."&gt; elements.
+     *
+     * When true, the per-run Span approach is used so that each &lt;abbr&gt;'s
+     * text content is routed to its own AbbrStuctualElement (PDF Span with E
+     * attribute) instead of being merged into the enclosing block's marked content.
+     */
+    private static boolean containingBlockHasAbbr(Box box) {
+        Box b = box.getParent();
+        while (b != null) {
+            if (b instanceof BlockBox && !(b instanceof LineBox)) {
+                return blockContainsAbbr(b);
+            }
+            b = b.getParent();
+        }
+        return false;
+    }
+
+    /**
+     * Returns true if the containing block requires the per-run Span approach,
+     * i.e. it contains &lt;a&gt; links or &lt;abbr title="..."&gt; elements.
+     */
+    private static boolean containingBlockNeedsPerRunSpans(Box box) {
+        Box b = box.getParent();
+        while (b != null) {
+            if (b instanceof BlockBox && !(b instanceof LineBox)) {
+                return blockContainsLink(b) || blockContainsAbbr(b);
+            }
+            b = b.getParent();
+        }
+        return false;
+    }
+
+    /**
      * Returns true if the box is an InlineLayoutBox that contains no actual text
      * (all InlineText children are empty). Used to avoid creating empty Span
      * marked content (e.g. inside Figure).
@@ -1306,9 +1359,9 @@ public class PdfBoxAccessibilityHelper {
                     getContainingBlockStructureElement(box) == _currentBlockSpanElement) {
                     return FALSE_TOKEN;
                 }
-                /* When the containing block uses per-run Spans (because it contains links),
+                /* When the containing block uses per-run Spans (links or abbr),
                  * treat inline backgrounds the same as the _blockSpanOpen case – no artifact. */
-                if (box instanceof InlineLayoutBox && containingBlockHasLinks(box)) {
+                if (box instanceof InlineLayoutBox && containingBlockNeedsPerRunSpans(box)) {
                     return FALSE_TOKEN;
                 }
                 if (box.hasNonTextContent(_ctx)) {
@@ -1351,12 +1404,12 @@ public class PdfBoxAccessibilityHelper {
                 if (hasNoTextContent(box)) {
                     return FALSE_TOKEN;
                 }
-                if (containingBlockHasLinks(box)) {
+                if (containingBlockNeedsPerRunSpans(box)) {
                     /*
-                     * The containing block (P, H*, etc.) has one or more <a> links.
+                     * The containing block has <a> links or <abbr title="..."> elements.
                      * Use the per-run Span approach (one BDC/EMC per InlineLayoutBox) so
-                     * that the Link structure elements appear in the correct position
-                     * relative to surrounding text in the structure tree.
+                     * that each inline structure element (Link, Span/abbr) appears in the
+                     * correct position relative to surrounding text in the structure tree.
                      *
                      * In the display-list rendering model, the BLOCK background phase runs
                      * for all blocks before inline/text content is painted, so we cannot
@@ -1364,10 +1417,10 @@ public class PdfBoxAccessibilityHelper {
                      * tree here at TEXT time to find the real containing block.
                      *
                      * Content items are routed through the box's own accessibility object
-                     * (set up during INLINE processing). Text inside <a> naturally goes to
-                     * AnchorStuctualElement; text outside goes to the surrounding lineBox
-                     * structure (skipped in finish(), delegating its children in paint order
-                     * directly to the block element P/H*).
+                     * (set up during INLINE processing). Text inside <a> goes to
+                     * AnchorStuctualElement; text inside <abbr> goes to AbbrStuctualElement;
+                     * text outside goes to the surrounding lineBox structure (skipped in
+                     * finish(), delegating its children in paint order directly to the block).
                      */
                     GenericContentItem current = createMarkedContentStructureItem(type, box);
                     _cs.beginMarkedContent(COSName.getPDFName(StandardStructureTypes.SPAN), current.dict);

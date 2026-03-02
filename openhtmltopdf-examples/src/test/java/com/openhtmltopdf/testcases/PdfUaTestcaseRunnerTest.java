@@ -8,6 +8,7 @@ import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Paths;
+import java.util.ArrayList;
 import java.util.List;
 
 import org.apache.pdfbox.Loader;
@@ -423,5 +424,158 @@ public class PdfUaTestcaseRunnerTest {
 
         // list-style:none(2) + list-style-image(2) = 4
         assertEquals("LI elements without Lbl (none + image markers)", 4, liWithoutLbl);
+    }
+
+    @Test
+    public void testAbbreviations() throws Exception {
+        run("abbreviations");
+    }
+
+    // -----------------------------------------------------------------------
+    // Helpers for abbreviation structure assertions
+    // -----------------------------------------------------------------------
+
+    /**
+     * Result record for a Span element that has Expansion Text (E attribute).
+     */
+    private static class AbbrSpanInfo {
+        final String expansionText;
+        final boolean hasContent; // true if the Span has at least one child content item
+
+        AbbrSpanInfo(String expansionText, boolean hasContent) {
+            this.expansionText = expansionText;
+            this.hasContent = hasContent;
+        }
+
+        @Override
+        public String toString() {
+            return "Span[E=\"" + expansionText + "\", hasContent=" + hasContent + "]";
+        }
+    }
+
+    /**
+     * Walks the whole structure tree and collects all Span elements that carry
+     * an Expansion Text (E attribute).  Each entry reports whether the Span has
+     * at least one child item (content item or nested structure element) so we
+     * can assert that the Span is not empty.
+     */
+    private static List<AbbrSpanInfo> collectAbbrSpans(byte[] pdfBytes) throws IOException {
+        List<AbbrSpanInfo> result = new ArrayList<>();
+        try (PDDocument doc = Loader.loadPDF(pdfBytes)) {
+            PDStructureTreeRoot root = doc.getDocumentCatalog().getStructureTreeRoot();
+            if (root == null) return result;
+            List<Object> kids = root.getKids();
+            if (kids != null) {
+                for (Object kid : kids) {
+                    collectAbbrSpansFromItem(kid, result);
+                }
+            }
+        }
+        return result;
+    }
+
+    private static void collectAbbrSpansFromItem(Object item, List<AbbrSpanInfo> result) {
+        if (!(item instanceof PDStructureElement)) return;
+        PDStructureElement elem = (PDStructureElement) item;
+
+        if ("Span".equals(elem.getStructureType())) {
+            // getExpandedForm() / getCOSObject "E" is the PDF expansion text attribute.
+            String expansion = elem.getExpandedForm();
+            if (expansion != null && !expansion.isEmpty()) {
+                List<Object> kids = elem.getKids();
+                boolean hasContent = kids != null && !kids.isEmpty();
+                result.add(new AbbrSpanInfo(expansion, hasContent));
+                // Don't recurse further – children are content items, not nested Spans.
+                return;
+            }
+        }
+
+        List<Object> kids = elem.getKids();
+        if (kids != null) {
+            for (Object kid : kids) {
+                collectAbbrSpansFromItem(kid, result);
+            }
+        }
+    }
+
+    // -----------------------------------------------------------------------
+
+    /**
+     * Verifies the PDF/UA structure for abbreviations in abbreviations.html.
+     *
+     * <p>Checks:
+     * <ol>
+     *   <li>Every {@code &lt;abbr title="..."&gt;} produces a PDF {@code Span} element
+     *       whose {@code E} (Expansion Text) attribute matches the {@code title}.</li>
+     *   <li>Each such {@code Span} is non-empty – i.e. the abbreviation text content
+     *       is correctly placed <em>inside</em> the Span, not alongside it.</li>
+     *   <li>An {@code &lt;abbr&gt;} without a {@code title} does NOT produce an
+     *       expansion-text Span (no false positives).</li>
+     * </ol>
+     *
+     * <p>abbreviations.html contains the following titled abbreviations:
+     * HTML (×1), W3C (×2: scenario 2 and 5), WHATWG (×1), UE (×2: scenario 4 and 6),
+     * EU (×1), HTTP (×1), HTTPS (×1), API (×1), PDF (×1), UA (×1), W3C again in
+     * scenario 10. The exact count is validated below.
+     *
+     * Run with {@code -Dtest.dumpStructure=true} to print the full structure tree.
+     */
+    @Test
+    public void testAbbreviationStructure() throws Exception {
+        byte[] pdf = renderToBytes("abbreviations");
+
+        if (Boolean.getBoolean("test.dumpStructure")) {
+            System.out.println("=== PDF Structure Tree (abbreviations.html) ===");
+            System.out.println(dumpStructureTree(pdf));
+        }
+
+        List<AbbrSpanInfo> abbrSpans = collectAbbrSpans(pdf);
+
+        System.out.println("Abbreviation Span elements found:");
+        for (AbbrSpanInfo info : abbrSpans) {
+            System.out.println("  " + info);
+        }
+
+        // Every abbr with a title must produce a non-empty Span
+        for (AbbrSpanInfo info : abbrSpans) {
+            assertTrue(
+                "Abbr Span with E=\"" + info.expansionText + "\" has no content children – " +
+                "abbreviation text was not placed inside the Span",
+                info.hasContent
+            );
+        }
+
+        // No empty Spans with expansion text are acceptable
+        long emptyCount = abbrSpans.stream().filter(s -> !s.hasContent).count();
+        assertEquals("There should be no empty Abbr Spans", 0, emptyCount);
+
+        // abbreviations.html has exactly these titled abbr occurrences:
+        // scenario 1: HTML
+        // scenario 2: W3C
+        // scenario 4: UE (fr)
+        // scenario 5: HTML, W3C, WHATWG
+        // scenario 6 (list): EU, UE (fr)
+        // scenario 7 (ol): HTTP, HTTPS
+        // scenario 8 (heading): API
+        // scenario 9 (table): PDF, UA
+        // scenario 10: W3C
+        // Total = 1+1+1+3+2+2+1+2+1 = 14
+        assertEquals("Expected number of titled <abbr> Span elements", 14, abbrSpans.size());
+
+        // Verify specific expansion texts are present
+        List<String> expansions = new ArrayList<>();
+        for (AbbrSpanInfo info : abbrSpans) {
+            expansions.add(info.expansionText);
+        }
+        assertTrue("Missing HTML expansion",     expansions.contains("HyperText Markup Language"));
+        assertTrue("Missing W3C expansion",      expansions.contains("World Wide Web Consortium"));
+        assertTrue("Missing WHATWG expansion",   expansions.contains("Web Hypertext Application Technology Working Group"));
+        assertTrue("Missing EU expansion",       expansions.contains("European Union"));
+        assertTrue("Missing UE expansion",       expansions.contains("Union Europeene"));
+        assertTrue("Missing HTTP expansion",     expansions.contains("HyperText Transfer Protocol"));
+        assertTrue("Missing HTTPS expansion",    expansions.contains("HyperText Transfer Protocol Secure"));
+        assertTrue("Missing API expansion",      expansions.contains("Application Programming Interface"));
+        assertTrue("Missing PDF expansion",      expansions.contains("Portable Document Format"));
+        assertTrue("Missing UA expansion",       expansions.contains("Universal Accessibility"));
     }
 }

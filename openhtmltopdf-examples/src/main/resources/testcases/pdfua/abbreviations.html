@@ -1,0 +1,88 @@
+<html lang="EN-US">
+<head>
+  <title>PDF/UA Abbreviation Accessibility Test</title>
+  <meta name="description" content="Tests for abbr element PDF/UA accessibility tagging"/>
+  <meta name="subject" content="PDF/UA abbreviation test"/>
+  <style>
+  @page {
+    size: 500px 900px;
+    margin: 20px;
+  }
+  body {
+    margin: 0;
+    font-family: 'TestFont';
+    font-size: 12px;
+  }
+  h2 { font-size: 13px; margin: 6px 0 2px; }
+  p, ul, ol { margin: 3px 0; }
+  </style>
+</head>
+<body>
+  <h1>Abbreviation accessibility tests</h1>
+
+  <!-- 1. abbr alone in a paragraph -->
+  <h2>Standalone abbr in paragraph</h2>
+  <p><abbr title="HyperText Markup Language">HTML</abbr></p>
+
+  <!-- 2. abbr with surrounding text -->
+  <h2>abbr surrounded by text</h2>
+  <p>The <abbr title="World Wide Web Consortium">W3C</abbr> defines web standards.</p>
+
+  <!-- 3. abbr without title (no special PDF tagging expected) -->
+  <h2>abbr without title (no Expansion Text)</h2>
+  <p>This is a plain <abbr>ABBR</abbr> without a title attribute.</p>
+
+  <!-- 4. abbr with lang attribute -->
+  <h2>abbr with lang attribute</h2>
+  <p><abbr title="Union Europeene" lang="fr-FR">UE</abbr> is the French abbreviation for the EU.</p>
+
+  <!-- 5. multiple abbr in one paragraph -->
+  <h2>Multiple abbr in one paragraph</h2>
+  <p>The <abbr title="HyperText Markup Language">HTML</abbr> spec is maintained by the
+     <abbr title="World Wide Web Consortium">W3C</abbr> and the
+     <abbr title="Web Hypertext Application Technology Working Group">WHATWG</abbr>.</p>
+
+  <!-- 6. abbr inside a list item (alone) -->
+  <h2>abbr in list item (alone)</h2>
+  <ul>
+    <li>English term: <abbr title="European Union">EU</abbr></li>
+    <li>French term: <abbr title="Union Europeene" lang="fr-FR">UE</abbr></li>
+    <li>No abbreviation here</li>
+  </ul>
+
+  <!-- 7. abbr inside an ordered list item with surrounding text -->
+  <h2>abbr in ordered list item with text</h2>
+  <ol>
+    <li>Standard <abbr title="HyperText Transfer Protocol">HTTP</abbr> runs on port 80.</li>
+    <li>Secure <abbr title="HyperText Transfer Protocol Secure">HTTPS</abbr> runs on port 443.</li>
+    <li>Plain item with no abbreviation.</li>
+  </ol>
+
+  <!-- 8. abbr inside a heading -->
+  <h2>abbr inside a heading: <abbr title="Application Programming Interface">API</abbr> design</h2>
+
+  <!-- 9. abbr inside a table cell -->
+  <h2>abbr in table cell</h2>
+  <table>
+    <thead>
+      <tr><th>Acronym</th><th>Meaning</th></tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><abbr title="Portable Document Format">PDF</abbr></td>
+        <td>A file format for documents.</td>
+      </tr>
+      <tr>
+        <td><abbr title="Universal Accessibility">UA</abbr></td>
+        <td>Standards for accessible documents.</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <!-- 10. abbr and link in the same paragraph -->
+  <h2>abbr and link in the same paragraph</h2>
+  <p>Visit the <abbr title="World Wide Web Consortium">W3C</abbr> at
+     <a href="https://www.w3.org">www.w3.org</a> for standards.</p>
+
+</body>
+</html>
