@@ -375,9 +375,10 @@ public class BlockBox extends Box {
         if (markerStyle != null && markerStyle.hasProperty(CSSName.CONTENT)) {
             result.setTextMarker(makeTextMarker(c, markerStyle));
         } else if ((listStyle != IdentValue.NONE || listStyleType!=null)  && ! imageMarker) {
-            if (listStyle == IdentValue.CIRCLE || listStyle == IdentValue.SQUARE ||
-                    listStyle == IdentValue.DISC || listStyleType!=null) {
+            if (listStyle == IdentValue.DISC || listStyle == IdentValue.CIRCLE || listStyle == IdentValue.SQUARE) {
                 result.setGlyphMarker(makeGlyphMarker(strutMetrics));
+            } else if (listStyleType != null) {
+                result.setTextMarker(makeTextMarkerForBullet(c, listStyleType));
             } else {
                 result.setTextMarker(makeTextMarker(c, listStyle));
             }
@@ -441,6 +442,23 @@ public class BlockBox extends Box {
         result.setLayoutWidth(w);
         result.setText(text);
 
+        return result;
+    }
+
+    /**
+     * Creates a text marker for unordered list bullets (disc/circle/square) or custom string.
+     * Uses Unicode: • disc, ◦ circle, ▪ square. Preserves any custom UTF-8 string.
+     */
+    private MarkerData.TextMarker makeTextMarkerForBullet(LayoutContext c, String markerText) {
+        int w = c.getTextRenderer().getWidth(
+                c.getFontContext(),
+                getStyle().getFSFont(c),
+                markerText);
+
+        MarkerData.TextMarker result = new MarkerData.TextMarker();
+        result.setAlignment(IdentValue.END);
+        result.setLayoutWidth(w);
+        result.setText(markerText);
         return result;
     }
 

@@ -15,6 +15,7 @@ import org.apache.pdfbox.cos.COSArray;
 import org.apache.pdfbox.cos.COSDictionary;
 import org.apache.pdfbox.cos.COSInteger;
 import org.apache.pdfbox.cos.COSName;
+import org.apache.pdfbox.cos.COSString;
 import org.apache.pdfbox.pdmodel.PDPage;
 import org.apache.pdfbox.pdmodel.common.PDNumberTreeNode;
 import org.apache.pdfbox.pdmodel.common.PDRectangle;
@@ -34,6 +35,7 @@ import com.openhtmltopdf.newtable.TableCellBox;
 import com.openhtmltopdf.render.BlockBox;
 import com.openhtmltopdf.render.Box;
 import com.openhtmltopdf.render.InlineLayoutBox;
+import com.openhtmltopdf.render.InlineText;
 import com.openhtmltopdf.render.LineBox;
 import com.openhtmltopdf.render.MarkerData;
 import com.openhtmltopdf.render.RenderingContext;
@@ -61,6 +63,53 @@ public class PdfBoxAccessibilityHelper {
     private AffineTransform _transform;
 
     private int _runningLevel;
+
+    /**
+     * When we merge TEXT into one Span per block: the block's structure element
+     * for which we have an open Span in the content stream.
+     */
+    private AbstractStructualElement _currentBlockSpanElement;
+    private boolean _blockSpanOpen;
+
+    /**
+     * Returns true if the box is an InlineLayoutBox that contains no actual text
+     * (all InlineText children are empty). Used to avoid creating empty Span
+     * marked content (e.g. inside Figure).
+     */
+    private static boolean hasNoTextContent(Box box) {
+        if (!(box instanceof InlineLayoutBox)) {
+            return false;
+        }
+        InlineLayoutBox ilb = (InlineLayoutBox) box;
+        for (Object child : ilb.getInlineChildren()) {
+            if (child instanceof InlineText) {
+                InlineText it = (InlineText) child;
+                if (it.getStart() < it.getEnd()) {
+                    return false;
+                }
+            }
+        }
+        return true;
+    }
+
+    /**
+     * Walks up from the box to find the containing BlockBox and returns its
+     * accessibility structure element, or null if not found.
+     */
+    private AbstractStructualElement getContainingBlockStructureElement(Box box) {
+        Box b = box;
+        while (b != null) {
+            if (b instanceof BlockBox) {
+                Object acc = b.getAccessibilityObject();
+                if (acc instanceof AbstractStructualElement) {
+                    return (AbstractStructualElement) acc;
+                }
+                return null;
+            }
+            b = b.getParent();
+        }
+        return null;
+    }
 
     private static Map<String, Supplier<AbstractStructualElement>> createTagSuppliers() {
         Map<String, Supplier<AbstractStructualElement>> suppliers = new HashMap<>();
@@ -1030,12 +1079,40 @@ public class PdfBoxAccessibilityHelper {
         return current;
     }
 
+    /**
+     * Creates a marked content structure item (Span) attached to the given
+     * parent (e.g. block element). Used when merging all text in a block
+     * into one Span.
+     */
+    private GenericContentItem createMarkedContentStructureItemForParent(AbstractStructualElement parent, Box box) {
+        GenericContentItem current = new GenericContentItem();
+
+        ensureAncestorTree(current, box.getParent());
+
+        parent.addChild(current);
+        current.parent = parent;
+        current.mcid = _nextMcid;
+        current.dict = createMarkedContentDictionary();
+        current.page = _page;
+
+        _pageItems._contentItems.add(current);
+
+        return current;
+    }
+
     private GenericContentItem createListItemLabelMarkedContent(StructureType type, Box box) {
         GenericContentItem current = new GenericContentItem();
 
         current.mcid = _nextMcid;
         current.dict = createMarkedContentDictionary();
         current.page = _page;
+
+        /* PDF/UA: when the list marker is drawn as a glyph/path (no text in content stream),
+         * set ActualText on Lbl so assistive tech can announce the bullet (e.g. "•", "◦", "▪"). */
+        String markerActualText = getMarkerAccessibilityText(box);
+        if (markerActualText != null && !markerActualText.isEmpty()) {
+            current.dict.setItem(COSName.getPDFName("ActualText"), new COSString(markerActualText));
+        }
 
         ListItemStructualElement li = (ListItemStructualElement) box.getAccessibilityObject();
         li.label.addChild(current);
@@ -1044,6 +1121,39 @@ public class PdfBoxAccessibilityHelper {
         _pageItems._contentItems.add(current);
 
         return current;
+    }
+
+    /**
+     * Returns the text that should be used as ActualText for the list item label (Lbl)
+     * when the marker is drawn as a glyph/path, so screen readers can announce the bullet.
+     * Returns null if no marker or no suitable text.
+     */
+    private static String getMarkerAccessibilityText(Box box) {
+        if (!(box instanceof BlockBox)) {
+            return null;
+        }
+        MarkerData markers = ((BlockBox) box).getMarkerData();
+        if (markers == null) {
+            return null;
+        }
+        if (markers.getTextMarker() != null) {
+            String t = markers.getTextMarker().getText();
+            return (t != null && !t.isEmpty()) ? t : null;
+        }
+        if (markers.getGlyphMarker() != null && box.getStyle() != null) {
+            IdentValue listStyle = IdentValue.valueOf(box.getStyle().getStringProperty(CSSName.LIST_STYLE_TYPE));
+            if (listStyle == IdentValue.DISC) {
+                return "\u2022"; // •
+            }
+            if (listStyle == IdentValue.CIRCLE) {
+                return "\u25E6"; // ◦
+            }
+            if (listStyle == IdentValue.SQUARE) {
+                return "\u25A0"; // ■
+            }
+            return "\u2022"; // fallback
+        }
+        return null;
     }
 
     private FigureContentItem createFigureContentStructureItem(StructureType type, Box box) {
@@ -1097,6 +1207,10 @@ public class PdfBoxAccessibilityHelper {
     private static final Token INSIDE_RUNNING = new Token();
     private static final Token STARTING_RUNNING = new Token();
     private static final Token NESTED_RUNNING = new Token();
+    /** Token when we opened a Span for the whole block; do not close on end. */
+    private static final Token OPEN_BLOCK_SPAN = new Token();
+    /** Token when we're inside a block's Span (not the first run). */
+    private static final Token INSIDE_BLOCK_SPAN = new Token();
 
     public Token startStructure(StructureType type, Box box) {
             // Check for items that appear on every page (fixed, running, page margins).
@@ -1123,6 +1237,11 @@ public class PdfBoxAccessibilityHelper {
             case BLOCK:
             case INLINE:
             case INLINE_CHILD_BOX: {
+                if (type == StructureType.BLOCK && _blockSpanOpen) {
+                    _cs.endMarkedContent();
+                    _blockSpanOpen = false;
+                    _currentBlockSpanElement = null;
+                }
                 AbstractStructualElement struct = (AbstractStructualElement) box.getAccessibilityObject();
                 if (struct == null) {
                     struct = createStructureItem(type, box);
@@ -1131,6 +1250,20 @@ public class PdfBoxAccessibilityHelper {
                 return FALSE_TOKEN;
             }
             case BACKGROUND: {
+                /* Don't emit any BACKGROUND artifact while we're inside a block's text content -
+                 * eliminates the remaining artifact at the end of H1/H2/P. */
+                if (_blockSpanOpen) {
+                    return FALSE_TOKEN;
+                }
+                /* Don't mark empty inlines' background as artifact (reduces noise). */
+                if (box instanceof InlineLayoutBox && hasNoTextContent(box)) {
+                    return FALSE_TOKEN;
+                }
+                /* Don't emit artifact for inline backgrounds when we're inside this block's text content. */
+                if (box instanceof InlineLayoutBox &&
+                    getContainingBlockStructureElement(box) == _currentBlockSpanElement) {
+                    return FALSE_TOKEN;
+                }
                 if (box.hasNonTextContent(_ctx)) {
                     COSDictionary current = createBackgroundArtifact(type, box);
                     _cs.beginMarkedContent(COSName.ARTIFACT, current);
@@ -1151,15 +1284,44 @@ public class PdfBoxAccessibilityHelper {
                 }
 
                 GenericContentItem current = createListItemLabelMarkedContent(type, box);
-                _cs.beginMarkedContent(COSName.getPDFName("Span"), current.dict);
+                /* Use Lbl tag so label content goes directly under Lbl, not wrapped in Span. */
+                ListItemStructualElement li = (ListItemStructualElement) box.getAccessibilityObject();
+                _cs.beginMarkedContent(COSName.getPDFName(li.label.getPdfTag()), current.dict);
                 return TRUE_TOKEN;
             }
             case TEXT: {
-                GenericContentItem current = createMarkedContentStructureItem(type, box);
-                _cs.beginMarkedContent(COSName.getPDFName(StandardStructureTypes.SPAN), current.dict);
-                return TRUE_TOKEN;
+                if (hasNoTextContent(box)) {
+                    return FALSE_TOKEN;
+                }
+                AbstractStructualElement blockStruct = getContainingBlockStructureElement(box);
+                if (blockStruct == null) {
+                    /* No block structure (e.g. inside table); keep one span per run. */
+                    GenericContentItem current = createMarkedContentStructureItem(type, box);
+                    _cs.beginMarkedContent(COSName.getPDFName(StandardStructureTypes.SPAN), current.dict);
+                    return TRUE_TOKEN;
+                }
+                if (blockStruct != _currentBlockSpanElement) {
+                    if (_blockSpanOpen) {
+                        _cs.endMarkedContent();
+                        _blockSpanOpen = false;
+                    }
+                    _currentBlockSpanElement = blockStruct;
+                }
+                if (!_blockSpanOpen) {
+                    GenericContentItem current = createMarkedContentStructureItemForParent(blockStruct, box);
+                    /* Use the block's tag (H1, P, etc.) so content goes directly under it, no Span. */
+                    _cs.beginMarkedContent(COSName.getPDFName(blockStruct.getPdfTag()), current.dict);
+                    _blockSpanOpen = true;
+                    return OPEN_BLOCK_SPAN;
+                }
+                return INSIDE_BLOCK_SPAN;
             }
             case REPLACED: {
+                if (_blockSpanOpen) {
+                    _cs.endMarkedContent();
+                    _blockSpanOpen = false;
+                    _currentBlockSpanElement = null;
+                }
                 AbstractStructualElement struct = (AbstractStructualElement) box.getAccessibilityObject();
                 if (struct == null) {
                     struct = createStructureItem(type, box);
@@ -1192,7 +1354,9 @@ public class PdfBoxAccessibilityHelper {
         if (value == TRUE_TOKEN) {
             _cs.endMarkedContent();
         } else if (value == FALSE_TOKEN ||
-                   value == INSIDE_RUNNING) {
+                   value == INSIDE_RUNNING ||
+                   value == OPEN_BLOCK_SPAN ||
+                   value == INSIDE_BLOCK_SPAN) {
             // do nothing...
         } else if (value == NESTED_RUNNING) {
             _runningLevel--;
@@ -1211,10 +1375,16 @@ public class PdfBoxAccessibilityHelper {
         this._transform = transform;
         this._pageItems = new PageItems();
         this._pageItemsMap.put(page, this._pageItems);
+        _currentBlockSpanElement = null;
+        _blockSpanOpen = false;
     }
 
     public void endPage() {
-
+        if (_blockSpanOpen) {
+            _cs.endMarkedContent();
+            _blockSpanOpen = false;
+            _currentBlockSpanElement = null;
+        }
     }
 
     private static class AnnotationWithStructureParent {
