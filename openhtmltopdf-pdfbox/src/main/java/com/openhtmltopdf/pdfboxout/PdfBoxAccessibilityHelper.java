@@ -429,7 +429,15 @@ public class PdfBoxAccessibilityHelper {
 
             createPdfStrucureElement(parent, child);
 
-            IdentValue listStyleType = child.box.getStyle().getIdent(CSSName.LIST_STYLE_TYPE);
+            /*
+             * Use IdentValue.valueOf() instead of getIdent() because list-style-type can
+             * hold a CSS <string> value (e.g. list-style-type: '* '), which is stored as
+             * a StringValue – not an IdentValue.  getIdent() would throw on those cases.
+             * IdentValue.valueOf() returns null for unknown / string values, which falls
+             * through to the "Decimal" fallback below.
+             */
+            IdentValue listStyleType = IdentValue.valueOf(
+                    child.box.getStyle().getStringProperty(CSSName.LIST_STYLE_TYPE));
             String listType;
 
             if (listStyleType == IdentValue.NONE) {
@@ -453,6 +461,9 @@ public class PdfBoxAccessibilityHelper {
                 listType = "LowerAlpha";
             } else if (listStyleType == IdentValue.ARABIC_INDIC) {
                 listType = "Ordered";
+            } else if (listStyleType == null) {
+                // CSS string value (e.g. list-style-type: '* ') – custom bullet, not ordered.
+                listType = "None";
             } else {
                 // Armenian, Georgian, Latin and Greek are not supported by the PDF spec.
                 listType = "Decimal";
@@ -1315,6 +1326,17 @@ public class PdfBoxAccessibilityHelper {
                         (markers.getGlyphMarker() == null &&
                          markers.getTextMarker() == null &&
                          markers.getImageMarker() == null)) {
+                        return FALSE_TOKEN;
+                    }
+
+                    /*
+                     * list-style-image markers are purely visual – there is no text
+                     * equivalent available from HTML/CSS (no alt attribute exists for
+                     * list-style-image), and browsers/screen-readers treat them as
+                     * decorative.  Skip the Lbl marked-content so the image is painted
+                     * as an untagged artifact instead of a Lbl with no ActualText.
+                     */
+                    if (markers.getImageMarker() != null) {
                         return FALSE_TOKEN;
                     }
                 }

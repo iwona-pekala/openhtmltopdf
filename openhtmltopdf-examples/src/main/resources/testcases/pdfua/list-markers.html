@@ -1,0 +1,91 @@
+<html lang="EN-US">
+<head>
+  <title>PDF/UA List Marker Variants</title>
+  <meta name="description" content="Tests for various list marker types and their PDF/UA accessibility tagging"/>
+  <meta name="subject" content="PDF/UA list marker test"/>
+  <style>
+  @page {
+    size: 400px 900px;
+    margin: 20px;
+  }
+  body {
+    margin: 0;
+    font-family: 'TestFont';
+    font-size: 12px;
+  }
+  h2 { font-size: 13px; margin: 6px 0 2px; }
+  ul, ol { margin: 2px 0; padding-left: 24px; }
+  li { margin: 1px 0; }
+  </style>
+</head>
+<body>
+  <h1>List marker variants</h1>
+
+  <!-- disc (default ul) – GlyphMarker, Lbl with ActualText "•" expected -->
+  <h2>Unordered - disc (default)</h2>
+  <ul>
+    <li>Disc one</li>
+    <li>Disc two</li>
+  </ul>
+
+  <!-- circle – GlyphMarker, Lbl with ActualText "◦" expected -->
+  <h2>Unordered - circle</h2>
+  <ul style="list-style-type: circle;">
+    <li>Circle one</li>
+    <li>Circle two</li>
+  </ul>
+
+  <!-- square – GlyphMarker, Lbl with ActualText "■" expected -->
+  <h2>Unordered - square</h2>
+  <ul style="list-style-type: square;">
+    <li>Square one</li>
+    <li>Square two</li>
+  </ul>
+
+  <!-- none – no marker, no Lbl expected -->
+  <h2>Unordered - none (no Lbl expected)</h2>
+  <ul style="list-style: none;">
+    <li>None one</li>
+    <li>None two</li>
+  </ul>
+
+  <!-- custom string marker – TextMarker, Lbl with ActualText "* " expected -->
+  <h2>Unordered - custom string marker</h2>
+  <ul style="list-style-type: '* ';">
+    <li>Custom one</li>
+    <li>Custom two</li>
+  </ul>
+
+  <!-- image marker – ImageMarker, no Lbl expected (decorative, no alt text available) -->
+  <h2>Unordered - image marker (no Lbl expected)</h2>
+  <ul style="list-style-image: url('../../demos/images/flyingsaucer.png');">
+    <li>Image one</li>
+    <li>Image two</li>
+  </ul>
+
+  <!-- ol decimal (default) – TextMarker, Lbl expected -->
+  <h2>Ordered - decimal (default)</h2>
+  <ol>
+    <li>One</li>
+    <li>Two</li>
+    <li>Three</li>
+  </ol>
+
+  <!-- ol upper-alpha – TextMarker, Lbl expected -->
+  <h2>Ordered - upper-alpha</h2>
+  <ol style="list-style-type: upper-alpha;">
+    <li>Alpha</li>
+    <li>Beta</li>
+    <li>Gamma</li>
+  </ol>
+
+  <!-- ol lower-roman – TextMarker, Lbl expected -->
+  <h2>Ordered - lower-roman</h2>
+  <ol style="list-style-type: lower-roman;">
+    <li>One</li>
+    <li>Two</li>
+    <li>Three</li>
+  </ol>
+
+</body>
+</html>

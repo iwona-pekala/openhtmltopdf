@@ -279,6 +279,71 @@ public class PdfUaTestcaseRunnerTest {
         run("links");
     }
 
+    @Test
+    public void testListMarkers() throws Exception {
+        run("list-markers");
+    }
+
+    // -----------------------------------------------------------------------
+    // Helpers for list marker structure assertions
+    // -----------------------------------------------------------------------
+
+    /**
+     * Walks the structure tree and returns two counts:
+     * [0] = number of LI elements that have a Lbl direct child,
+     * [1] = number of LI elements that have NO Lbl direct child.
+     */
+    private static int[] countLiWithAndWithoutLbl(byte[] pdfBytes) throws IOException {
+        int[] counts = new int[2];
+        try (PDDocument doc = Loader.loadPDF(pdfBytes)) {
+            PDStructureTreeRoot root = doc.getDocumentCatalog().getStructureTreeRoot();
+            if (root == null) return counts;
+            List<Object> kids = root.getKids();
+            if (kids != null) {
+                for (Object kid : kids) {
+                    countLiItems(kid, counts);
+                }
+            }
+        }
+        return counts;
+    }
+
+    private static void countLiItems(Object item, int[] counts) {
+        if (!(item instanceof PDStructureElement)) return;
+        PDStructureElement elem = (PDStructureElement) item;
+
+        if ("LI".equals(elem.getStructureType())) {
+            boolean hasLbl = false;
+            List<Object> kids = elem.getKids();
+            if (kids != null) {
+                for (Object kid : kids) {
+                    if (kid instanceof PDStructureElement
+                            && "Lbl".equals(((PDStructureElement) kid).getStructureType())) {
+                        hasLbl = true;
+                        break;
+                    }
+                }
+            }
+            if (hasLbl) counts[0]++; else counts[1]++;
+            // recurse into LBody (nested lists are inside LBody)
+            if (kids != null) {
+                for (Object kid : kids) {
+                    countLiItems(kid, counts);
+                }
+            }
+            return;
+        }
+
+        List<Object> kids = elem.getKids();
+        if (kids != null) {
+            for (Object kid : kids) {
+                countLiItems(kid, counts);
+            }
+        }
+    }
+
+    // -----------------------------------------------------------------------
+
     /**
      * Verifies that inside paragraphs containing links, the PDF structure order has
      * text content BEFORE the Link element (not after).
@@ -313,5 +378,50 @@ public class PdfUaTestcaseRunnerTest {
                 line.contains("WRONG:")
             );
         }
+    }
+
+    /**
+     * Verifies PDF/UA structure for all list marker types in list-markers.html.
+     *
+     * <p>Expected structure per list:
+     * <ul>
+     *   <li>disc / circle / square – glyph markers → Lbl present (with ActualText in content dict)</li>
+     *   <li>custom string '* ' – TextMarker → Lbl present</li>
+     *   <li>list-style: none – no marker data → NO Lbl</li>
+     *   <li>list-style-image – ImageMarker → NO Lbl (decorative, skipped as artifact)</li>
+     *   <li>ol decimal / upper-alpha / lower-roman – TextMarker → Lbl present</li>
+     * </ul>
+     *
+     * <p>list-markers.html contains:
+     * <ul>
+     *   <li>ul disc ×2, circle ×2, square ×2, custom ×2 → 8 LI with Lbl</li>
+     *   <li>ol decimal ×3, upper-alpha ×3, lower-roman ×3 → 9 LI with Lbl</li>
+     *   <li>ul none ×2, ul image ×2 → 4 LI without Lbl</li>
+     * </ul>
+     *
+     * Run with {@code -Dtest.dumpStructure=true} to print the full structure tree.
+     */
+    @Test
+    public void testListMarkerStructure() throws Exception {
+        byte[] pdf = renderToBytes("list-markers");
+
+        if (Boolean.getBoolean("test.dumpStructure")) {
+            System.out.println("=== PDF Structure Tree (list-markers.html) ===");
+            System.out.println(dumpStructureTree(pdf));
+        }
+
+        int[] counts = countLiWithAndWithoutLbl(pdf);
+        int liWithLbl    = counts[0];
+        int liWithoutLbl = counts[1];
+
+        System.out.printf("list-markers structure: LI with Lbl=%d, LI without Lbl=%d%n",
+                liWithLbl, liWithoutLbl);
+
+        // disc(2) + circle(2) + square(2) + custom-string(2)
+        //   + ol-decimal(3) + ol-upper-alpha(3) + ol-lower-roman(3) = 17
+        assertEquals("LI elements with Lbl marker", 17, liWithLbl);
+
+        // list-style:none(2) + list-style-image(2) = 4
+        assertEquals("LI elements without Lbl (none + image markers)", 4, liWithoutLbl);
     }
 }
