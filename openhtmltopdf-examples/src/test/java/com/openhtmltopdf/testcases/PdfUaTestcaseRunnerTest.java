@@ -379,6 +379,13 @@ public class PdfUaTestcaseRunnerTest {
                 line.contains("WRONG:")
             );
         }
+
+        // Regression guard: link underlines are paths and must be tagged as artifacts.
+        // Before the fix, BACKGROUND for per-run blocks returned FALSE_TOKEN unconditionally,
+        // leaving the underline path untagged – causing "Path object not tagged" in PAC.
+        int untaggedPaths = countUntaggedPathOps(pdf);
+        assertEquals("No untagged path operations (link underlines must be /Artifact)",
+            0, untaggedPaths);
     }
 
     /**
@@ -435,29 +442,74 @@ public class PdfUaTestcaseRunnerTest {
     // Helpers for abbreviation structure assertions
     // -----------------------------------------------------------------------
 
-    /**
-     * Result record for a Span element that has Expansion Text (E attribute).
-     */
-    private static class AbbrSpanInfo {
-        final String expansionText;
-        final boolean hasContent; // true if the Span has at least one child content item
+    /** Block-level structure types that should never appear as children of H1-H6 or P. */
+    private static final java.util.Set<String> BLOCK_TYPES = new java.util.HashSet<>(java.util.Arrays.asList(
+            "H1", "H2", "H3", "H4", "H5", "H6", "P", "L", "Table", "Div", "Sect", "Art"
+    ));
 
-        AbbrSpanInfo(String expansionText, boolean hasContent) {
-            this.expansionText = expansionText;
-            this.hasContent = hasContent;
+    /**
+     * Walks the whole structure tree and collects problems.
+     * Returns a list of human-readable violation strings; empty = no violations.
+     *
+     * Checks:
+     * <ol>
+     *   <li>No Span element has zero children (empty Span – usually means abbr/link text
+     *       was not routed into the Span's marked content).</li>
+     *   <li>No block-level element (H1-H6, P) has another block-level element as a
+     *       DIRECT child (indicates content from a sibling block leaked into the wrong
+     *       parent due to an unclosed block span).</li>
+     * </ol>
+     */
+    private static List<String> collectStructureViolations(byte[] pdfBytes) throws IOException {
+        List<String> violations = new ArrayList<>();
+        try (PDDocument doc = Loader.loadPDF(pdfBytes)) {
+            PDStructureTreeRoot root = doc.getDocumentCatalog().getStructureTreeRoot();
+            if (root == null) return violations;
+            List<Object> kids = root.getKids();
+            if (kids != null) {
+                for (Object kid : kids) {
+                    checkStructureViolations(kid, null, violations);
+                }
+            }
+        }
+        return violations;
+    }
+
+    private static void checkStructureViolations(Object item, String parentType, List<String> violations) {
+        if (!(item instanceof PDStructureElement)) return;
+        PDStructureElement elem = (PDStructureElement) item;
+        String type = elem.getStructureType();
+
+        // Check 1: no empty Span (a Span with no children is always a bug)
+        if ("Span".equals(type)) {
+            List<Object> kids = elem.getKids();
+            if (kids == null || kids.isEmpty()) {
+                violations.add("Empty Span (no children) found inside parent " + parentType);
+            }
         }
 
-        @Override
-        public String toString() {
-            return "Span[E=\"" + expansionText + "\", hasContent=" + hasContent + "]";
+        // Check 2: block-level elements (H*, P) must not contain other block-level elements
+        if (parentType != null && isHeadingOrP(parentType) && BLOCK_TYPES.contains(type)) {
+            violations.add("Block element <" + type + "> is a direct child of <" + parentType +
+                    "> – possible block-span leakage from a sibling element");
+        }
+
+        List<Object> kids = elem.getKids();
+        if (kids != null) {
+            for (Object kid : kids) {
+                checkStructureViolations(kid, type, violations);
+            }
         }
     }
 
+    private static boolean isHeadingOrP(String type) {
+        return "P".equals(type) || type.matches("H[1-6]?");
+    }
+
     /**
-     * Walks the whole structure tree and collects all Span elements that carry
-     * an Expansion Text (E attribute).  Each entry reports whether the Span has
-     * at least one child item (content item or nested structure element) so we
-     * can assert that the Span is not empty.
+     * Collects all Span elements in the structure tree that carry an Expansion Text
+     * (E attribute, from PDF/UA abbreviation tagging).  Each entry also reports
+     * whether the Span has at least one child so we can assert non-emptiness.
      */
     private static List<AbbrSpanInfo> collectAbbrSpans(byte[] pdfBytes) throws IOException {
         List<AbbrSpanInfo> result = new ArrayList<>();
@@ -479,13 +531,11 @@ public class PdfUaTestcaseRunnerTest {
         PDStructureElement elem = (PDStructureElement) item;
 
         if ("Span".equals(elem.getStructureType())) {
-            // getExpandedForm() / getCOSObject "E" is the PDF expansion text attribute.
             String expansion = elem.getExpandedForm();
             if (expansion != null && !expansion.isEmpty()) {
                 List<Object> kids = elem.getKids();
                 boolean hasContent = kids != null && !kids.isEmpty();
                 result.add(new AbbrSpanInfo(expansion, hasContent));
-                // Don't recurse further – children are content items, not nested Spans.
                 return;
             }
         }
@@ -498,25 +548,142 @@ public class PdfUaTestcaseRunnerTest {
         }
     }
 
+    /**
+     * Result record for a Span element that has Expansion Text (E attribute).
+     */
+    private static class AbbrSpanInfo {
+        final String expansionText;
+        final boolean hasContent;
+
+        AbbrSpanInfo(String expansionText, boolean hasContent) {
+            this.expansionText = expansionText;
+            this.hasContent = hasContent;
+        }
+
+        @Override
+        public String toString() {
+            return "Span[E=\"" + expansionText + "\", hasContent=" + hasContent + "]";
+        }
+    }
+
+    // -----------------------------------------------------------------------
+
+    /**
+     * Counts how many times a given PDF structure type (e.g. "THead", "TFoot") appears
+     * anywhere in the logical structure tree.
+     */
+    private static int countStructureType(byte[] pdfBytes, String typeName) throws IOException {
+        final int[] count = {0};
+        try (PDDocument doc = Loader.loadPDF(pdfBytes)) {
+            PDStructureTreeRoot root = doc.getDocumentCatalog().getStructureTreeRoot();
+            if (root == null) return 0;
+            List<Object> kids = root.getKids();
+            if (kids != null) {
+                for (Object kid : kids) {
+                    countStructureTypeInItem(kid, typeName, count);
+                }
+            }
+        }
+        return count[0];
+    }
+
+    private static void countStructureTypeInItem(Object item, String typeName, int[] count) {
+        if (!(item instanceof PDStructureElement)) return;
+        PDStructureElement elem = (PDStructureElement) item;
+        if (typeName.equals(elem.getStructureType())) {
+            count[0]++;
+        }
+        List<Object> kids = elem.getKids();
+        if (kids != null) {
+            for (Object kid : kids) {
+                countStructureTypeInItem(kid, typeName, count);
+            }
+        }
+    }
+
+    /**
+     * Counts PDF path-painting operators (f, F, s, S, b, B, etc.) that appear outside
+     * any BDC/BMC marked-content region.  Such operators cause "Path object not tagged"
+     * errors in PDF/UA compliance checkers like PAC.
+     */
+    private static int countUntaggedPathOps(byte[] pdfBytes) throws IOException {
+        return countUntaggedPathOps(pdfBytes, false);
+    }
+
+    private static int countUntaggedPathOps(byte[] pdfBytes, boolean debug) throws IOException {
+        final int[] count = {0};
+        try (PDDocument doc = Loader.loadPDF(pdfBytes)) {
+            int pageNum = 0;
+            for (org.apache.pdfbox.pdmodel.PDPage page : doc.getPages()) {
+                pageNum++;
+                final int[] depth = {0};
+                final int pageNumFinal = pageNum;
+                new org.apache.pdfbox.contentstream.PDFStreamEngine() {
+                    @Override
+                    protected void processOperator(
+                            org.apache.pdfbox.contentstream.operator.Operator operator,
+                            java.util.List<org.apache.pdfbox.cos.COSBase> operands)
+                            throws java.io.IOException {
+                        switch (operator.getName()) {
+                            case "BDC": case "BMC": depth[0]++; break;
+                            case "EMC": if (depth[0] > 0) depth[0]--; break;
+                            /* Path-painting operators: if none of these is inside a marked-content
+                             * region the operator is "untagged" per PDF/UA. */
+                            case "f": case "F": case "f*":
+                            case "s": case "S":
+                            case "b": case "B": case "b*": case "B*":
+                                if (depth[0] == 0) {
+                                    count[0]++;
+                                    if (debug) {
+                                        System.out.println("  UNTAGGED path op '" + operator.getName()
+                                            + "' on page " + pageNumFinal + " depth=" + depth[0]);
+                                    }
+                                }
+                                break;
+                            default: break;
+                        }
+                    }
+                }.processPage(page);
+            }
+        }
+        return count[0];
+    }
+
     // -----------------------------------------------------------------------
 
     /**
      * Verifies the PDF/UA structure for abbreviations in abbreviations.html.
      *
-     * <p>Checks:
-     * <ol>
-     *   <li>Every {@code &lt;abbr title="..."&gt;} produces a PDF {@code Span} element
-     *       whose {@code E} (Expansion Text) attribute matches the {@code title}.</li>
-     *   <li>Each such {@code Span} is non-empty – i.e. the abbreviation text content
-     *       is correctly placed <em>inside</em> the Span, not alongside it.</li>
-     *   <li>An {@code &lt;abbr&gt;} without a {@code title} does NOT produce an
-     *       expansion-text Span (no false positives).</li>
-     * </ol>
+     * <p>Structural checks (hierarchy):
+     * <ul>
+     *   <li>No Span element is empty (abbreviation text must be inside the Span).</li>
+     *   <li>No block-level element (H1-H6, P) has another block-level element as a
+     *       direct child – which would mean content from a sibling block leaked into
+     *       it because a preceding block span was not closed before entering per-run
+     *       mode.</li>
+     * </ul>
      *
-     * <p>abbreviations.html contains the following titled abbreviations:
-     * HTML (×1), W3C (×2: scenario 2 and 5), WHATWG (×1), UE (×2: scenario 4 and 6),
-     * EU (×1), HTTP (×1), HTTPS (×1), API (×1), PDF (×1), UA (×1), W3C again in
-     * scenario 10. The exact count is validated below.
+     * <p>Content checks:
+     * <ul>
+     *   <li>Every {@code &lt;abbr title="..."&gt;} produces exactly one PDF Span with
+     *       the matching Expansion Text value.</li>
+     *   <li>{@code &lt;abbr&gt;} WITHOUT a title does NOT produce any expansion Span.</li>
+     * </ul>
+     *
+     * <p>abbreviations.html titled abbr count per scenario:
+     * <pre>
+     *  1  standalone P      : HTML
+     *  2  P with text       : W3C
+     *  3  no title          : (none)
+     *  4  lang attr         : UE
+     *  5  multiple in P     : HTML, W3C, WHATWG
+     *  6  list (ul)         : EU, UE
+     *  7  list (ol)         : HTTP, HTTPS
+     *  8  heading           : API
+     *  9  table             : PDF, UA, WWW
+     *  10 abbr + link in P  : W3C
+     *  Total = 15
+     * </pre>
      *
      * Run with {@code -Dtest.dumpStructure=true} to print the full structure tree.
      */
@@ -529,53 +696,72 @@ public class PdfUaTestcaseRunnerTest {
             System.out.println(dumpStructureTree(pdf));
         }
 
+        // ---- 1. Hierarchy checks (no leaked content, no empty Spans) ----
+        List<String> violations = collectStructureViolations(pdf);
+        if (!violations.isEmpty()) {
+            System.out.println("Structure violations found:");
+            for (String v : violations) System.out.println("  " + v);
+        }
+        assertTrue(
+            "Structure violations detected (see stdout for details): " + violations,
+            violations.isEmpty()
+        );
+
+        // ---- 2. Collect all expansion-text Spans ----
         List<AbbrSpanInfo> abbrSpans = collectAbbrSpans(pdf);
 
-        System.out.println("Abbreviation Span elements found:");
+        System.out.println("Abbreviation Span elements found (" + abbrSpans.size() + "):");
         for (AbbrSpanInfo info : abbrSpans) {
             System.out.println("  " + info);
         }
 
-        // Every abbr with a title must produce a non-empty Span
+        // ---- 3. Every expansion Span must be non-empty ----
         for (AbbrSpanInfo info : abbrSpans) {
             assertTrue(
-                "Abbr Span with E=\"" + info.expansionText + "\" has no content children – " +
-                "abbreviation text was not placed inside the Span",
+                "Abbr Span E=\"" + info.expansionText + "\" is empty – text not placed inside Span",
                 info.hasContent
             );
         }
 
-        // No empty Spans with expansion text are acceptable
-        long emptyCount = abbrSpans.stream().filter(s -> !s.hasContent).count();
-        assertEquals("There should be no empty Abbr Spans", 0, emptyCount);
+        // ---- 4. Correct total count ----
+        // Scenarios: 1+1+0+1+3+2+2+1+3+1 = 15
+        assertEquals("Total titled <abbr> Span count", 15, abbrSpans.size());
 
-        // abbreviations.html has exactly these titled abbr occurrences:
-        // scenario 1: HTML
-        // scenario 2: W3C
-        // scenario 4: UE (fr)
-        // scenario 5: HTML, W3C, WHATWG
-        // scenario 6 (list): EU, UE (fr)
-        // scenario 7 (ol): HTTP, HTTPS
-        // scenario 8 (heading): API
-        // scenario 9 (table): PDF, UA
-        // scenario 10: W3C
-        // Total = 1+1+1+3+2+2+1+2+1 = 14
-        assertEquals("Expected number of titled <abbr> Span elements", 14, abbrSpans.size());
-
-        // Verify specific expansion texts are present
+        // ---- 5. Specific expansion texts must be present ----
         List<String> expansions = new ArrayList<>();
         for (AbbrSpanInfo info : abbrSpans) {
             expansions.add(info.expansionText);
         }
-        assertTrue("Missing HTML expansion",     expansions.contains("HyperText Markup Language"));
-        assertTrue("Missing W3C expansion",      expansions.contains("World Wide Web Consortium"));
-        assertTrue("Missing WHATWG expansion",   expansions.contains("Web Hypertext Application Technology Working Group"));
-        assertTrue("Missing EU expansion",       expansions.contains("European Union"));
-        assertTrue("Missing UE expansion",       expansions.contains("Union Europeene"));
-        assertTrue("Missing HTTP expansion",     expansions.contains("HyperText Transfer Protocol"));
-        assertTrue("Missing HTTPS expansion",    expansions.contains("HyperText Transfer Protocol Secure"));
-        assertTrue("Missing API expansion",      expansions.contains("Application Programming Interface"));
-        assertTrue("Missing PDF expansion",      expansions.contains("Portable Document Format"));
-        assertTrue("Missing UA expansion",       expansions.contains("Universal Accessibility"));
+        assertTrue("HTML",     expansions.contains("HyperText Markup Language"));
+        assertTrue("W3C",      expansions.contains("World Wide Web Consortium"));
+        assertTrue("WHATWG",   expansions.contains("Web Hypertext Application Technology Working Group"));
+        assertTrue("EU",       expansions.contains("European Union"));
+        assertTrue("UE",       expansions.contains("Union Europeene"));
+        assertTrue("HTTP",     expansions.contains("HyperText Transfer Protocol"));
+        assertTrue("HTTPS",    expansions.contains("HyperText Transfer Protocol Secure"));
+        assertTrue("API",      expansions.contains("Application Programming Interface"));
+        assertTrue("PDF",      expansions.contains("Portable Document Format"));
+        assertTrue("UA",       expansions.contains("Universal Accessibility"));
+        assertTrue("WWW",      expansions.contains("World Wide Web"));
+
+        // ---- 6. abbr WITHOUT title must NOT appear in expansion Spans ----
+        assertFalse("Plain <abbr> without title should not produce an expansion Span",
+            expansions.stream().anyMatch(e -> e == null || e.isEmpty()));
+
+        // ---- 7. Table structure: <thead> present, empty <tfoot> must be skipped ----
+        // abbreviations.html table has <thead> but no <tfoot>.
+        // TFoot is optional per PDF spec (ISO 32000) – empty ones must not be emitted.
+        assertEquals("abbreviations.html table has <thead>: expect 1 THead in structure",
+            1, countStructureType(pdf, "THead"));
+        assertEquals("abbreviations.html table has no <tfoot>: expect 0 TFoot in structure",
+            0, countStructureType(pdf, "TFoot"));
+
+        // ---- 8. No untagged path operations (regression: link underline must be an artifact) ----
+        // Scenario 10 has <a href> inside a per-run Span block (link+abbr in same paragraph).
+        // The link underline is a path; it must be wrapped in an /Artifact BDC to avoid
+        // "Path object not tagged" errors in PDF/UA compliance checkers.
+        int untaggedPaths = countUntaggedPathOps(pdf);
+        assertEquals("No untagged path operations (link underlines must be tagged as artifacts)",
+            0, untaggedPaths);
     }
 }

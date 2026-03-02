@@ -432,6 +432,18 @@ public class PdfBoxAccessibilityHelper {
         void finish(AbstractStructualElement parent) {
             AbbrStuctualElement child = this;
 
+            if (child.children.isEmpty()) {
+                /*
+                 * No content was routed to this element. This happens when:
+                 *  (a) <abbr> has no title attribute – the block-span optimization keeps the
+                 *      text in the enclosing block's marked content, so nothing lands here,
+                 *  (b) the element is otherwise empty.
+                 * In either case, creating an empty PDF Span with no children is incorrect
+                 * and produces phantom structure elements in the logical structure tree.
+                 */
+                return;
+            }
+
             createPdfStrucureElement(parent, child);
 
             if (box.getElement() != null) {
@@ -680,6 +692,10 @@ public class PdfBoxAccessibilityHelper {
         @Override
         void finish(AbstractStructualElement parent) {
             TableHeadStructualElement child = this;
+            if (child.children.isEmpty()) {
+                /* THead is optional per PDF spec – skip if the HTML table has no <thead>. */
+                return;
+            }
             createPdfStrucureElement(parent, child);
 
             handleGlobalAttributes();
@@ -730,6 +746,10 @@ public class PdfBoxAccessibilityHelper {
         @Override
         void finish(AbstractStructualElement parent) {
             TableFootStructualElement child = this;
+            if (child.children.isEmpty()) {
+                /* TFoot is optional per PDF spec – skip if the HTML table has no <tfoot>. */
+                return;
+            }
             createPdfStrucureElement(parent, child);
 
             handleGlobalAttributes();
@@ -1350,8 +1370,13 @@ public class PdfBoxAccessibilityHelper {
                 if (_blockSpanOpen) {
                     return FALSE_TOKEN;
                 }
-                /* Don't mark empty inlines' background as artifact (reduces noise). */
-                if (box instanceof InlineLayoutBox && hasNoTextContent(box)) {
+                /*
+                 * Don't mark a purely empty inline's background as artifact (reduces noise).
+                 * But if the inline has non-text content (e.g. a text-decoration underline on an
+                 * <a><img/></a> link) we must still fall through so the path can be tagged.
+                 */
+                if (box instanceof InlineLayoutBox && hasNoTextContent(box)
+                        && !box.hasNonTextContent(_ctx)) {
                     return FALSE_TOKEN;
                 }
                 /* Don't emit artifact for inline backgrounds when we're inside this block's text content. */
@@ -1359,10 +1384,17 @@ public class PdfBoxAccessibilityHelper {
                     getContainingBlockStructureElement(box) == _currentBlockSpanElement) {
                     return FALSE_TOKEN;
                 }
-                /* When the containing block uses per-run Spans (links or abbr),
-                 * treat inline backgrounds the same as the _blockSpanOpen case – no artifact. */
+                /*
+                 * In per-run Span mode (block has links or abbr), suppress inline backgrounds
+                 * that carry no visual content.  But boxes with non-text content (e.g. the path
+                 * drawn for a link underline) must still be tagged as artifacts; otherwise PAC
+                 * reports "Path object not tagged".
+                 */
                 if (box instanceof InlineLayoutBox && containingBlockNeedsPerRunSpans(box)) {
-                    return FALSE_TOKEN;
+                    if (!box.hasNonTextContent(_ctx)) {
+                        return FALSE_TOKEN;
+                    }
+                    // Has non-text content (e.g. link underline) – fall through to artifact tag.
                 }
                 if (box.hasNonTextContent(_ctx)) {
                     COSDictionary current = createBackgroundArtifact(type, box);
@@ -1421,7 +1453,18 @@ public class PdfBoxAccessibilityHelper {
                      * AnchorStuctualElement; text inside <abbr> goes to AbbrStuctualElement;
                      * text outside goes to the surrounding lineBox structure (skipped in
                      * finish(), delegating its children in paint order directly to the block).
+                     *
+                     * Important: if a previous block (e.g. H2 preceding this P) left its
+                     * block span open, we must close it here before opening per-run Spans.
+                     * Without this close the per-run BDC markers would be nested inside the
+                     * preceding block's BDC, causing PDF viewers to mis-attribute the
+                     * content to the wrong structure element.
                      */
+                    if (_blockSpanOpen) {
+                        _cs.endMarkedContent();
+                        _blockSpanOpen = false;
+                        _currentBlockSpanElement = null;
+                    }
                     GenericContentItem current = createMarkedContentStructureItem(type, box);
                     _cs.beginMarkedContent(COSName.getPDFName(StandardStructureTypes.SPAN), current.dict);
                     return TRUE_TOKEN;
